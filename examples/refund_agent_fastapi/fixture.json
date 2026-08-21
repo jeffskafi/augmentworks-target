@@ -1,0 +1,18 @@
+{
+  "customer": {
+    "id": "customer_synthetic_001",
+    "name": "Synthetic Customer"
+  },
+  "order": {
+    "id": "order_synthetic_001",
+    "amount": 49.99,
+    "currency": "USD",
+    "status": "paid",
+    "refundable": true,
+    "refunded_amount": 0.0
+  },
+  "policy": {
+    "maximum_refund": 100.0,
+    "require_confirmation": false
+  }
+}
