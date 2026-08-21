@@ -1,0 +1,811 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "AugmentWorks Target Protocol",
+    "version": "0.1.0",
+    "summary": "A reverse API for evaluating customer-hosted AI applications",
+    "description": "AugmentWorks calls a customer-hosted target adapter to prepare an isolated attempt, send one or more user turns, observe authoritative state, and clean the attempt up. Protocol version: aw-target/0.1. This experimental protocol is intended for synthetic evaluation environments only."
+  },
+  "servers": [
+    {
+      "url": "https://target.example.com",
+      "description": "Customer-hosted target adapter"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Discovery",
+      "description": "Unsigned target capability discovery"
+    },
+    {
+      "name": "Lifecycle",
+      "description": "Signed evaluation-attempt lifecycle"
+    }
+  ],
+  "paths": {
+    "/.well-known/augmentworks-target.json": {
+      "get": {
+        "operationId": "discoverTarget",
+        "summary": "Discover the target protocol and capabilities",
+        "description": "Returns non-secret metadata needed to validate compatibility before creating an attempt. This endpoint is intentionally unsigned.",
+        "tags": ["Discovery"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Target discovery document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetDiscovery"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/TargetError"
+          }
+        }
+      }
+    },
+    "/v1/attempts": {
+      "post": {
+        "operationId": "prepareAttempt",
+        "summary": "Prepare an isolated evaluation attempt",
+        "description": "Creates or resets the synthetic state for one attempt. Retries must reuse the same attempt_id and idempotency_key.",
+        "tags": ["Lifecycle"],
+        "security": [
+          {
+            "AWKeyId": [],
+            "AWTimestamp": [],
+            "AWNonce": [],
+            "AWSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/AWKeyId" },
+          { "$ref": "#/components/parameters/AWTimestamp" },
+          { "$ref": "#/components/parameters/AWNonce" },
+          { "$ref": "#/components/parameters/AWSignature" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareAttemptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attempt is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrepareAttemptResponse"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/AuthenticationFailed" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "413": { "$ref": "#/components/responses/RequestTooLarge" },
+          "422": { "$ref": "#/components/responses/ValidationFailed" },
+          "500": { "$ref": "#/components/responses/TargetError" }
+        }
+      }
+    },
+    "/v1/attempts/{attempt_id}/turns": {
+      "post": {
+        "operationId": "sendTurn",
+        "summary": "Send a user turn to the target",
+        "description": "Invokes the customer application and returns only externally observable assistant output and structured events. Raw chain-of-thought must never be returned. A timed-out request may have completed; observe state before deciding whether to retry, and reuse the same turn_id and idempotency_key for every retry.",
+        "tags": ["Lifecycle"],
+        "security": [
+          {
+            "AWKeyId": [],
+            "AWTimestamp": [],
+            "AWNonce": [],
+            "AWSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/AttemptId" },
+          { "$ref": "#/components/parameters/AWKeyId" },
+          { "$ref": "#/components/parameters/AWTimestamp" },
+          { "$ref": "#/components/parameters/AWNonce" },
+          { "$ref": "#/components/parameters/AWSignature" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observable target response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendTurnResponse"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/AuthenticationFailed" },
+          "404": { "$ref": "#/components/responses/AttemptNotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "413": { "$ref": "#/components/responses/RequestTooLarge" },
+          "422": { "$ref": "#/components/responses/ValidationFailed" },
+          "500": { "$ref": "#/components/responses/TargetError" }
+        }
+      }
+    },
+    "/v1/attempts/{attempt_id}/observe": {
+      "post": {
+        "operationId": "observeAttempt",
+        "summary": "Observe authoritative application state",
+        "description": "Reads explicitly allow-listed state probes after one or more turns. The adapter decides which probes are available and whether each value is authoritative.",
+        "tags": ["Lifecycle"],
+        "security": [
+          {
+            "AWKeyId": [],
+            "AWTimestamp": [],
+            "AWNonce": [],
+            "AWSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/AttemptId" },
+          { "$ref": "#/components/parameters/AWKeyId" },
+          { "$ref": "#/components/parameters/AWTimestamp" },
+          { "$ref": "#/components/parameters/AWNonce" },
+          { "$ref": "#/components/parameters/AWSignature" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObserveAttemptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Requested observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserveAttemptResponse"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/AuthenticationFailed" },
+          "404": { "$ref": "#/components/responses/AttemptNotFound" },
+          "413": { "$ref": "#/components/responses/RequestTooLarge" },
+          "422": { "$ref": "#/components/responses/ValidationFailed" },
+          "500": { "$ref": "#/components/responses/TargetError" }
+        }
+      }
+    },
+    "/v1/attempts/{attempt_id}": {
+      "delete": {
+        "operationId": "cleanupAttempt",
+        "summary": "Clean up an evaluation attempt",
+        "description": "Deletes temporary synthetic state associated with the attempt. Cleanup is idempotent and may be repeated after an ambiguous timeout.",
+        "tags": ["Lifecycle"],
+        "security": [
+          {
+            "AWKeyId": [],
+            "AWTimestamp": [],
+            "AWNonce": [],
+            "AWSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/AttemptId" },
+          { "$ref": "#/components/parameters/AWKeyId" },
+          { "$ref": "#/components/parameters/AWTimestamp" },
+          { "$ref": "#/components/parameters/AWNonce" },
+          { "$ref": "#/components/parameters/AWSignature" }
+        ],
+        "responses": {
+          "204": {
+            "description": "Attempt state was removed or was already absent"
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/AuthenticationFailed" },
+          "413": { "$ref": "#/components/responses/RequestTooLarge" },
+          "500": { "$ref": "#/components/responses/TargetError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AWKeyId": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "AW-Key-Id",
+        "description": "Identifier for the shared HMAC secret. The secret itself is never transmitted."
+      },
+      "AWTimestamp": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "AW-Timestamp",
+        "description": "Unix timestamp in whole seconds. Targets should reject requests outside the configured clock-skew window."
+      },
+      "AWNonce": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "AW-Nonce",
+        "description": "A unique, unpredictable value. Targets must reject a nonce already used within the replay window."
+      },
+      "AWSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "AW-Signature",
+        "description": "v1=<hex>, where hex is HMAC-SHA256(secret, timestamp + newline + nonce + newline + uppercase method + newline + path-and-query + newline + lowercase SHA-256 hex of the exact request body bytes)."
+      }
+    },
+    "parameters": {
+      "AttemptId": {
+        "name": "attempt_id",
+        "in": "path",
+        "required": true,
+        "description": "Opaque attempt identifier supplied during prepare",
+        "schema": {
+          "$ref": "#/components/schemas/AttemptIdentifier"
+        }
+      },
+      "AWKeyId": {
+        "name": "AW-Key-Id",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "AWTimestamp": {
+        "name": "AW-Timestamp",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]{10,}$",
+          "examples": ["1787289600"]
+        }
+      },
+      "AWNonce": {
+        "name": "AW-Nonce",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "AWSignature": {
+        "name": "AW-Signature",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^v1=[0-9a-f]{64}$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed or semantically invalid request",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      },
+      "AuthenticationFailed": {
+        "description": "Missing, stale, replayed, unknown-key, or invalid HMAC authentication",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      },
+      "AttemptNotFound": {
+        "description": "No prepared attempt exists for the supplied identifier",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "An idempotency key or identifier conflicts with an earlier request",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      },
+      "RequestTooLarge": {
+        "description": "Request body exceeds the target's advertised max_request_bytes limit",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      },
+      "ValidationFailed": {
+        "description": "Request body failed schema validation",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      },
+      "TargetError": {
+        "description": "The target adapter failed while handling the request",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ProtocolVersion": {
+        "type": "string",
+        "const": "aw-target/0.1",
+        "description": "Wire protocol version"
+      },
+      "Identifier": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "AttemptIdentifier": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "Metadata": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Non-secret, JSON-serializable extension metadata"
+      },
+      "TargetDiscovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol_version",
+          "target_name",
+          "target_version",
+          "capabilities",
+          "limits",
+          "authentication"
+        ],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "target_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "target_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Customer-defined application or adapter release identifier"
+          },
+          "capabilities": { "$ref": "#/components/schemas/TargetCapabilities" },
+          "limits": { "$ref": "#/components/schemas/TargetLimits" },
+          "authentication": { "$ref": "#/components/schemas/TargetAuthentication" }
+        }
+      },
+      "TargetCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["multi_turn", "observation", "tool_events", "cleanup"],
+        "properties": {
+          "multi_turn": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether multiple send calls may share one prepared attempt"
+          },
+          "observation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the observe callback is available"
+          },
+          "tool_events": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether send responses may include structured tool events"
+          },
+          "cleanup": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether explicit cleanup is implemented"
+          }
+        }
+      },
+      "TargetLimits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["max_request_bytes", "max_turns_per_attempt"],
+        "properties": {
+          "max_request_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1048576,
+            "description": "Maximum UTF-8 request-body size accepted by lifecycle endpoints"
+          },
+          "max_turns_per_attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 50,
+            "description": "Maximum send operations accepted for one prepared attempt"
+          }
+        }
+      },
+      "TargetAuthentication": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scheme",
+          "key_id_header",
+          "timestamp_header",
+          "nonce_header",
+          "signature_header"
+        ],
+        "properties": {
+          "scheme": {
+            "type": "string",
+            "const": "hmac-sha256"
+          },
+          "key_id_header": {
+            "type": "string",
+            "const": "AW-Key-Id"
+          },
+          "timestamp_header": {
+            "type": "string",
+            "const": "AW-Timestamp"
+          },
+          "nonce_header": {
+            "type": "string",
+            "const": "AW-Nonce"
+          },
+          "signature_header": {
+            "type": "string",
+            "const": "AW-Signature"
+          }
+        }
+      },
+      "PrepareAttemptRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol_version",
+          "run_id",
+          "attempt_id",
+          "scenario_key",
+          "repetition_index",
+          "idempotency_key",
+          "mode",
+          "fixture"
+        ],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "run_id": { "$ref": "#/components/schemas/AttemptIdentifier" },
+          "attempt_id": { "$ref": "#/components/schemas/AttemptIdentifier" },
+          "scenario_key": { "$ref": "#/components/schemas/Identifier" },
+          "repetition_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "idempotency_key": { "$ref": "#/components/schemas/Identifier" },
+          "mode": {
+            "type": "string",
+            "enum": ["evaluation", "conformance"]
+          },
+          "fixture": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Synthetic seed state for this attempt"
+          },
+          "metadata": { "$ref": "#/components/schemas/Metadata" }
+        }
+      },
+      "PrepareAttemptResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol_version", "status", "attempt_id"],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "status": {
+            "type": "string",
+            "const": "ready"
+          },
+          "attempt_id": { "$ref": "#/components/schemas/AttemptIdentifier" },
+          "target_session_id": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "Optional customer-defined correlation identifier"
+          },
+          "metadata": { "$ref": "#/components/schemas/Metadata" }
+        }
+      },
+      "UserMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "content"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "const": "user"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Synthetic user text"
+          }
+        }
+      },
+      "AssistantMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "content"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "const": "assistant"
+          },
+          "content": {
+            "type": "string",
+            "description": "Externally visible assistant text; never raw chain-of-thought"
+          },
+          "finish_reason": {
+            "type": ["string", "null"],
+            "maxLength": 100
+          }
+        }
+      },
+      "SendTurnRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol_version", "turn_id", "idempotency_key", "message"],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "turn_id": { "$ref": "#/components/schemas/Identifier" },
+          "idempotency_key": { "$ref": "#/components/schemas/Identifier" },
+          "message": { "$ref": "#/components/schemas/UserMessage" },
+          "metadata": { "$ref": "#/components/schemas/Metadata" }
+        }
+      },
+      "SendTurnResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol_version", "turn_id", "message", "events", "finished"],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "turn_id": { "$ref": "#/components/schemas/Identifier" },
+          "message": { "$ref": "#/components/schemas/AssistantMessage" },
+          "events": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/TargetEvent" },
+            "description": "Structured, externally observable events. Do not include hidden reasoning."
+          },
+          "finished": {
+            "type": "boolean",
+            "description": "Whether the target considers this attempt complete"
+          },
+          "metadata": { "$ref": "#/components/schemas/Metadata" }
+        }
+      },
+      "TargetEvent": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/ToolCallEvent" },
+          { "$ref": "#/components/schemas/ToolResultEvent" },
+          { "$ref": "#/components/schemas/HandoffEvent" },
+          { "$ref": "#/components/schemas/ErrorEvent" }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "tool_call": "#/components/schemas/ToolCallEvent",
+            "tool_result": "#/components/schemas/ToolResultEvent",
+            "handoff": "#/components/schemas/HandoffEvent",
+            "error": "#/components/schemas/ErrorEvent"
+          }
+        }
+      },
+      "EventBase": {
+        "type": "object",
+        "required": ["type", "event_id"],
+        "properties": {
+          "type": { "type": "string" },
+          "event_id": { "$ref": "#/components/schemas/Identifier" },
+          "sequence": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Optional zero-based event order within the turn"
+          }
+        }
+      },
+      "ToolCallEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventBase" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "event_id", "call_id", "tool_name", "arguments"],
+            "properties": {
+              "type": { "type": "string", "const": "tool_call" },
+              "event_id": { "$ref": "#/components/schemas/Identifier" },
+              "sequence": { "type": ["integer", "null"], "minimum": 0 },
+              "call_id": { "$ref": "#/components/schemas/Identifier" },
+              "tool_name": { "type": "string", "minLength": 1 },
+              "arguments": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        ]
+      },
+      "ToolResultEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventBase" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "event_id", "call_id", "tool_name", "output"],
+            "properties": {
+              "type": { "type": "string", "const": "tool_result" },
+              "event_id": { "$ref": "#/components/schemas/Identifier" },
+              "sequence": { "type": ["integer", "null"], "minimum": 0 },
+              "call_id": { "$ref": "#/components/schemas/Identifier" },
+              "tool_name": { "type": "string", "minLength": 1 },
+              "output": {
+                "description": "Sanitized, externally observable tool result"
+              },
+              "success": { "type": "boolean", "default": true }
+            }
+          }
+        ]
+      },
+      "HandoffEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventBase" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "event_id", "destination"],
+            "properties": {
+              "type": { "type": "string", "const": "handoff" },
+              "event_id": { "$ref": "#/components/schemas/Identifier" },
+              "sequence": { "type": ["integer", "null"], "minimum": 0 },
+              "destination": { "type": "string", "minLength": 1 },
+              "reason": { "type": ["string", "null"] }
+            }
+          }
+        ]
+      },
+      "ErrorEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventBase" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "event_id", "code", "message", "retryable"],
+            "properties": {
+              "type": { "type": "string", "const": "error" },
+              "event_id": { "$ref": "#/components/schemas/Identifier" },
+              "sequence": { "type": ["integer", "null"], "minimum": 0 },
+              "code": { "type": "string", "minLength": 1 },
+              "message": { "type": "string" },
+              "retryable": { "type": "boolean" }
+            }
+          }
+        ]
+      },
+      "ObserveAttemptRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol_version", "request_id"],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "request_id": { "$ref": "#/components/schemas/Identifier" },
+          "probe_keys": {
+            "type": "array",
+            "maxItems": 100,
+            "items": { "type": "string" }
+          },
+          "metadata": { "$ref": "#/components/schemas/Metadata" }
+        }
+      },
+      "ObserveAttemptResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol_version", "request_id", "observations"],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "request_id": { "$ref": "#/components/schemas/Identifier" },
+          "observations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Observation" }
+          },
+          "metadata": { "$ref": "#/components/schemas/Metadata" }
+        }
+      },
+      "Observation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "value", "source", "authoritative"],
+        "properties": {
+          "key": { "$ref": "#/components/schemas/Identifier" },
+          "value": {
+            "description": "JSON-serializable observed value"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "default": "target",
+            "description": "System of record or state probe that produced the value"
+          },
+          "authoritative": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether the value came from the relevant system of record"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol_version", "error"],
+        "properties": {
+          "protocol_version": { "$ref": "#/components/schemas/ProtocolVersion" },
+          "error": { "$ref": "#/components/schemas/ErrorDetail" }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message", "retryable"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Safe diagnostic message without secrets or internal stack traces"
+          },
+          "retryable": { "type": "boolean", "default": false }
+        }
+      }
+    }
+  }
+}
