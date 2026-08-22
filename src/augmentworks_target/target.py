@@ -18,6 +18,8 @@ from .models import (
     TargetCapabilities,
     TargetDiscovery,
     TargetLimits,
+    ToolCallEvent,
+    ToolResultEvent,
 )
 from .security import NonceStore, SecretResolver
 
@@ -91,16 +93,15 @@ class Target:
         capabilities: TargetCapabilities | None = None,
         limits: TargetLimits | None = None,
     ) -> None:
-        inferred_capabilities = TargetCapabilities(
-            multi_turn=True,
-            observation=observe is not None,
-            tool_events=True,
-            cleanup=True,
+        resolved_capabilities = _resolve_capabilities(
+            capabilities,
+            has_observe_callback=observe is not None,
+            has_cleanup_callback=cleanup is not None,
         )
         self._discovery = TargetDiscovery(
             target_name=name,
             target_version=version,
-            capabilities=capabilities or inferred_capabilities,
+            capabilities=resolved_capabilities,
             limits=limits or TargetLimits(),
         )
         self._prepare_callback = prepare
@@ -126,6 +127,12 @@ class Target:
         response = _validate_result(SendTurnResponse, result)
         if response.turn_id != request.turn_id:
             raise RuntimeError("send callback returned a different turn_id")
+        if not self._discovery.capabilities.tool_events and any(
+            isinstance(event, (ToolCallEvent, ToolResultEvent)) for event in response.events
+        ):
+            raise RuntimeError(
+                "send callback returned tool events but the target does not declare tool_events"
+            )
         return response
 
     async def observe(
@@ -144,10 +151,15 @@ class Target:
         return response
 
     async def cleanup(self, attempt_id: str) -> None:
-        if self._cleanup_callback is not None:
-            result = self._cleanup_callback(attempt_id)
-            if inspect.isawaitable(result):
-                await result
+        if self._cleanup_callback is None:
+            raise TargetRequestError(
+                "cleanup_not_supported",
+                "This target does not support explicit cleanup",
+                status_code=404,
+            )
+        result = self._cleanup_callback(attempt_id)
+        if inspect.isawaitable(result):
+            await result
 
     def fastapi_router(
         self,
@@ -183,3 +195,36 @@ def _validate_result(model: type[ModelT], value: object) -> ModelT:
     if isinstance(value, model):
         return value
     return model.model_validate(value)
+
+
+def _resolve_capabilities(
+    declared: TargetCapabilities | None,
+    *,
+    has_observe_callback: bool,
+    has_cleanup_callback: bool,
+) -> TargetCapabilities:
+    """Resolve callback-backed capabilities and reject contradictory claims.
+
+    Observation and cleanup can be inferred without executing customer code.
+    Tool-event support cannot, so its safe inferred value remains ``False``
+    unless the caller explicitly declares it in ``TargetCapabilities``.
+    """
+
+    if declared is None:
+        return TargetCapabilities(
+            observation=has_observe_callback,
+            tool_events=False,
+            cleanup=has_cleanup_callback,
+        )
+
+    callback_capabilities = {
+        "observation": has_observe_callback,
+        "cleanup": has_cleanup_callback,
+    }
+    for name, available in callback_capabilities.items():
+        if name in declared.model_fields_set and getattr(declared, name) is not available:
+            raise ValueError(
+                f"capabilities.{name} must match whether the {name} callback is configured"
+            )
+
+    return declared.model_copy(update=callback_capabilities)

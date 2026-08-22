@@ -168,7 +168,10 @@ async def _authenticated_body(
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
-            if int(content_length) > max_request_bytes:
+            declared_length = int(content_length)
+            if declared_length < 0:
+                raise ValueError
+            if declared_length > max_request_bytes:
                 raise TargetRequestError(
                     "request_too_large",
                     "Request exceeds the target's advertised size limit",
@@ -181,13 +184,18 @@ async def _authenticated_body(
                 status_code=400,
             ) from exc
 
-    body = await request.body()
-    if len(body) > max_request_bytes:
-        raise TargetRequestError(
-            "request_too_large",
-            "Request exceeds the target's advertised size limit",
-            status_code=413,
-        )
+    body_buffer = bytearray()
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        if len(chunk) > max_request_bytes - len(body_buffer):
+            raise TargetRequestError(
+                "request_too_large",
+                "Request exceeds the target's advertised size limit",
+                status_code=413,
+            )
+        body_buffer.extend(chunk)
+    body = bytes(body_buffer)
 
     verify_request(
         headers=request.headers,

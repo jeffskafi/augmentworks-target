@@ -135,7 +135,7 @@ target = Target(
     send,
     observe=observe,
     cleanup=cleanup,
-    capabilities=TargetCapabilities(observation=True, tool_events=True),
+    capabilities=TargetCapabilities(observation=True, tool_events=True, cleanup=True),
 )
 
 app = FastAPI(title="Synthetic Refund Agent Target")

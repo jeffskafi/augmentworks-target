@@ -59,3 +59,11 @@ def test_wire_contract_does_not_define_hidden_reasoning() -> None:
 
     assert "chain_of_thought" not in property_names
     assert "reasoning" not in property_names
+
+
+def test_optional_callback_capabilities_default_fail_closed() -> None:
+    capabilities = load_spec()["components"]["schemas"]["TargetCapabilities"]["properties"]
+
+    assert capabilities["observation"]["default"] is False
+    assert capabilities["tool_events"]["default"] is False
+    assert capabilities["cleanup"]["default"] is False
