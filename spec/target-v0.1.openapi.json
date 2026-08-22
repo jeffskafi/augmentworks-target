@@ -441,7 +441,7 @@
           },
           "cleanup": {
             "type": "boolean",
-            "default": true,
+            "default": false,
             "description": "Whether explicit cleanup is implemented"
           }
         }

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,6 +20,8 @@ from augmentworks_target.models import (
     PrepareAttemptResponse,
     SendTurnRequest,
     SendTurnResponse,
+    TargetCapabilities,
+    TargetLimits,
     ToolCallEvent,
     ToolResultEvent,
 )
@@ -74,6 +80,11 @@ def build_app() -> tuple[FastAPI, dict[str, dict[str, Any]]]:
         send,
         observe=observe,
         cleanup=cleanup,
+        capabilities=TargetCapabilities(
+            observation=True,
+            tool_events=True,
+            cleanup=True,
+        ),
     )
     app = FastAPI()
     app.include_router(create_router(target, secrets={KEY_ID: SECRET}))
@@ -125,6 +136,86 @@ def test_discovery_is_public_but_mutations_require_authentication() -> None:
     assert discovery.json()["authentication"]["scheme"] == "hmac-sha256"
     assert unauthenticated.status_code == 401
     assert unauthenticated.json()["error"]["code"] == "missing_auth_header"
+
+
+def test_chunked_oversized_body_is_rejected_before_authentication_or_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_calls = 0
+    authentication_calls = 0
+
+    def prepare(request: PrepareAttemptRequest) -> PrepareAttemptResponse:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return PrepareAttemptResponse(attempt_id=request.attempt_id)
+
+    def verify_request_not_reached(**kwargs: object) -> None:
+        nonlocal authentication_calls
+        authentication_calls += 1
+
+    monkeypatch.setattr(
+        "augmentworks_target.fastapi.verify_request",
+        verify_request_not_reached,
+    )
+    target = Target(
+        "bounded-body-target",
+        "1.0",
+        prepare,
+        lambda attempt_id, request: {
+            "turn_id": request.turn_id,
+            "message": {"role": "assistant", "content": attempt_id},
+        },
+        limits=TargetLimits(max_request_bytes=8),
+    )
+    app = FastAPI()
+    app.include_router(create_router(target, secrets={KEY_ID: SECRET}))
+
+    async def body_chunks() -> AsyncIterator[bytes]:
+        yield b"123456"
+        yield b"789012"
+
+    async def send_chunked_request() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://target.test",
+        ) as client:
+            request = client.build_request(
+                "POST",
+                "/v1/attempts",
+                content=body_chunks(),
+            )
+            assert "content-length" not in request.headers
+            return await client.send(request)
+
+    response = asyncio.run(send_chunked_request())
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "request_too_large"
+    assert authentication_calls == 0
+    assert prepare_calls == 0
+
+
+def test_target_without_cleanup_callback_advertises_false_and_delete_fails_closed() -> None:
+    target = Target(
+        "no-cleanup-target",
+        "1.0",
+        lambda request: {"attempt_id": request.attempt_id},
+        lambda attempt_id, request: {
+            "turn_id": request.turn_id,
+            "message": {"role": "assistant", "content": attempt_id},
+        },
+    )
+    app = FastAPI()
+    app.include_router(create_router(target, secrets={KEY_ID: SECRET}))
+
+    with TestClient(app) as client:
+        discovery = client.get("/.well-known/augmentworks-target.json")
+        cleanup = signed_request(client, "DELETE", "/v1/attempts/attempt_1", None)
+
+    assert discovery.status_code == 200
+    assert discovery.json()["capabilities"]["cleanup"] is False
+    assert cleanup.status_code == 404
+    assert cleanup.json()["error"]["code"] == "cleanup_not_supported"
 
 
 def test_signed_prepare_send_observe_cleanup_lifecycle() -> None:

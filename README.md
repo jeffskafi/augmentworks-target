@@ -164,6 +164,30 @@ corresponding Pydantic response model instead of a dictionary. See
 [`examples/refund_agent_fastapi`](examples/refund_agent_fastapi) for a complete
 synthetic adapter with structured tool events.
 
+`Target` infers `observation` and `cleanup` only when their callbacks are
+actually configured. Tool-event support cannot be determined safely from a
+function signature, so it is fail-closed by default. If `send` can return
+`ToolCallEvent` or `ToolResultEvent`, declare that explicitly:
+
+```python
+from augmentworks_target import TargetCapabilities
+
+target = Target(
+    name="refund-sandbox",
+    version="2026-08-20",
+    prepare=prepare,
+    send=send,
+    observe=observe,
+    cleanup=cleanup,
+    capabilities=TargetCapabilities(tool_events=True),
+)
+```
+
+Explicit `observation` or `cleanup` values must agree with the corresponding
+callbacks; contradictory configuration fails during startup. An adapter with
+no cleanup callback advertises `cleanup: false`, and its cleanup endpoint
+returns `cleanup_not_supported` instead of a false HTTP 204 success.
+
 ## Check protocol conformance
 
 The CLI checks discovery compatibility and (when a fixture is supplied) the

@@ -33,7 +33,7 @@ class TargetCapabilities(ProtocolModel):
     multi_turn: bool = True
     observation: bool = False
     tool_events: bool = False
-    cleanup: bool = True
+    cleanup: bool = False
 
 
 class TargetLimits(ProtocolModel):
