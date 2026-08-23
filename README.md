@@ -4,8 +4,8 @@ Python SDK and language-neutral protocol for connecting a customer-hosted AI
 application to AugmentWorks behavioral evaluations.
 
 > **Experimental (`aw-target/0.1`)** — the wire protocol and Python API may
-> change before `1.0`, and the package is not yet published to PyPI. Use it only
-> with synthetic data in a dedicated test environment. Do not send production
+> change before `1.0`. Use it only with synthetic data in a dedicated test
+> environment. Do not send production
 > data, customer transcripts, PHI, PCI data, regulated financial records,
 > production credentials, or raw model chain-of-thought.
 
@@ -42,18 +42,32 @@ The lifecycle is deliberately small:
 Discovery is available at
 `GET /.well-known/augmentworks-target.json`. The complete language-neutral
 contract is in
-[`spec/target-v0.1.openapi.json`](spec/target-v0.1.openapi.json).
+[`spec/target-v0.1.openapi.json`](https://github.com/jeffskafi/augmentworks-target/blob/v0.1.0/spec/target-v0.1.openapi.json).
+
+## Installation
+
+Install the core SDK and conformance CLI from PyPI:
+
+```bash
+python -m pip install "augmentworks-target==0.1.0"
+```
+
+FastAPI adapters should install the optional integration:
+
+```bash
+python -m pip install "augmentworks-target[fastapi]==0.1.0" "uvicorn[standard]>=0.30,<1"
+```
 
 ## Five-minute FastAPI target
 
-Requires Python 3.10 or newer. Clone this repository, then install it with the
-FastAPI integration and a local ASGI server:
+Requires Python 3.10 or newer. Install the FastAPI integration and a local ASGI
+server:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[fastapi]" uvicorn
-export AW_TARGET_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+python -m pip install "augmentworks-target[fastapi]==0.1.0" "uvicorn[standard]>=0.30,<1"
+export AUGMENTWORKS_TARGET_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32))')"
 ```
 
 Create `app.py`:
@@ -147,7 +161,7 @@ app = FastAPI()
 app.include_router(
     create_router(
         target,
-        secrets={"local-eval": os.environ["AW_TARGET_SECRET"]},
+        secrets={"local-eval": os.environ["AUGMENTWORKS_TARGET_SECRET"]},
     )
 )
 ```
@@ -161,7 +175,7 @@ curl http://127.0.0.1:8000/.well-known/augmentworks-target.json
 
 The callbacks may be synchronous or asynchronous. They may also return the
 corresponding Pydantic response model instead of a dictionary. See
-[`examples/refund_agent_fastapi`](examples/refund_agent_fastapi) for a complete
+[`examples/refund_agent_fastapi`](https://github.com/jeffskafi/augmentworks-target/tree/v0.1.0/examples/refund_agent_fastapi) for a complete
 synthetic adapter with structured tool events.
 
 `Target` infers `observation` and `cleanup` only when their callbacks are
@@ -194,10 +208,13 @@ The CLI checks discovery compatibility and (when a fixture is supplied) the
 authenticated prepare/send/observe/cleanup lifecycle with correlated IDs. Keep
 secrets in an environment variable rather than shell history:
 
+The bundled repository example includes a synthetic fixture. From a checkout
+of the `v0.1.0` tag, run:
+
 ```bash
 augmentworks-target verify http://127.0.0.1:8000 \
   --key-id local-eval \
-  --secret-env AW_TARGET_SECRET \
+  --secret-env AUGMENTWORKS_TARGET_SECRET \
   --fixture examples/refund_agent_fastapi/fixture.json \
   --message "Please refund order SYNTH-1001"
 ```
@@ -305,7 +322,7 @@ design partners. Near-term work is intentionally demand-driven:
    core protocol will remain independent of model and agent vendors.
 4. Add another language SDK (likely TypeScript) when customer codebases require
    it rather than attempting feature parity prematurely.
-5. Publish signed releases to PyPI and define compatibility/deprecation policy
+5. Maintain signed PyPI releases and define a compatibility/deprecation policy
    after the protocol has survived pilot integrations.
 
 Please open an issue for a protocol ambiguity or integration blocker. Do not
@@ -314,4 +331,5 @@ artifacts in public issues.
 
 ## License
 
-Apache-2.0. See [`LICENSE`](LICENSE).
+Apache-2.0. See
+[`LICENSE`](https://github.com/jeffskafi/augmentworks-target/blob/v0.1.0/LICENSE).

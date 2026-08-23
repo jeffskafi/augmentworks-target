@@ -39,7 +39,7 @@ from .security import (
 )
 from .target import Target, TargetRequestError
 
-__version__ = "0.1.0a1"
+__version__ = "0.1.0"
 
 __all__ = [
     "PROTOCOL_VERSION",

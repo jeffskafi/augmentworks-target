@@ -1,0 +1,259 @@
+name: Publish Python distributions
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: augmentworks-target-pypi-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and validate distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      package-version: ${{ steps.version.outputs.package-version }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Validate tag, commit, and package version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          package_version="$(python -c 'import ast; from pathlib import Path; tree = ast.parse(Path("src/augmentworks_target/__init__.py").read_text()); print(next(node.value.value for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)))')"
+          python -c 'import tomllib; config = tomllib.load(open("pyproject.toml", "rb")); assert config["project"]["dynamic"] == ["version"]; assert config["tool"]["hatch"]["version"]["path"] == "src/augmentworks_target/__init__.py"'
+
+          if [ "$RELEASE_TAG" != "v$package_version" ]; then
+            echo "release tag $RELEASE_TAG must equal v$package_version" >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "release tag must point to a commit contained in origin/main" >&2
+            exit 1
+          fi
+
+          echo "package-version=$package_version" >> "$GITHUB_OUTPUT"
+
+      - name: Install quality and packaging tools
+        run: >-
+          python -m pip install --upgrade pip &&
+          python -m pip install
+          ".[dev]"
+          "check-wheel-contents>=0.6,<1"
+          "twine>=7,<8"
+
+      - name: Run release checks
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+          python -m mypy src
+          python -m pytest
+
+      - name: Build wheel and source distribution
+        run: |
+          test ! -e dist
+          python -m build --sdist --wheel --outdir dist
+
+      - name: Validate distribution metadata and contents
+        run: |
+          python -m twine check --strict dist/*
+          check-wheel-contents dist/*.whl
+          test "$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 2
+          sha256sum dist/*
+
+      - name: Store distributions for downstream verification
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: python-package-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+
+  smoke-artifacts:
+    name: Smoke-test downloaded artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install and exercise the wheel
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.package-version }}
+        run: |
+          wheel_path="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          python -m venv "$RUNNER_TEMP/wheel-smoke"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install "${wheel_path}[fastapi]"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "import importlib.metadata; import augmentworks_target; from augmentworks_target.fastapi import create_router; assert augmentworks_target.__version__ == '$PACKAGE_VERSION'; assert importlib.metadata.version('augmentworks-target') == '$PACKAGE_VERSION'"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/wheel-smoke/bin/augmentworks-target" --help
+
+      - name: Install and exercise the source distribution
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.package-version }}
+        run: |
+          sdist_path="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          python -m venv "$RUNNER_TEMP/sdist-smoke"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install "$sdist_path"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -c "import importlib.metadata; import augmentworks_target; assert augmentworks_target.__version__ == '$PACKAGE_VERSION'; assert importlib.metadata.version('augmentworks-target') == '$PACKAGE_VERSION'"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip check
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [build, smoke-artifacts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/augmentworks-target
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download validated distributions
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          packages-dir: dist/
+          print-hash: true
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  verify-testpypi:
+    name: Verify TestPyPI release
+    needs: [build, publish-testpypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Verify TestPyPI file hashes
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.package-version }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          version = os.environ["PACKAGE_VERSION"]
+          expected = {
+              artifact.name: hashlib.sha256(artifact.read_bytes()).hexdigest()
+              for artifact in Path("dist").iterdir()
+              if artifact.is_file()
+          }
+          endpoint = f"https://test.pypi.org/pypi/augmentworks-target/{version}/json"
+
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen(endpoint, timeout=15) as response:
+                      release = json.load(response)
+              except (urllib.error.URLError, TimeoutError):
+                  if attempt == 59:
+                      raise
+                  time.sleep(5)
+                  continue
+
+              actual = {
+                  item["filename"]: item["digests"]["sha256"]
+                  for item in release["urls"]
+              }
+              if actual == expected:
+                  break
+              if attempt == 59:
+                  raise RuntimeError(
+                      f"TestPyPI artifacts do not match the workflow artifacts: {actual!r}"
+                  )
+              time.sleep(5)
+          PY
+
+      - name: Install and exercise the TestPyPI package
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.package-version }}
+        run: |
+          python -m venv "$RUNNER_TEMP/testpypi-smoke"
+          "$RUNNER_TEMP/testpypi-smoke/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/testpypi-smoke/bin/python" -m pip install "httpx>=0.27,<1" "pydantic>=2.8,<3" "fastapi>=0.111,<1"
+          "$RUNNER_TEMP/testpypi-smoke/bin/python" -m pip install --no-cache-dir --no-deps --index-url https://test.pypi.org/simple/ "augmentworks-target==$PACKAGE_VERSION"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/testpypi-smoke/bin/python" -c "import importlib.metadata; import augmentworks_target; from augmentworks_target.fastapi import create_router; assert augmentworks_target.__version__ == '$PACKAGE_VERSION'; assert importlib.metadata.version('augmentworks-target') == '$PACKAGE_VERSION'"
+          "$RUNNER_TEMP/testpypi-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/testpypi-smoke/bin/augmentworks-target" --help
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build, verify-testpypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/augmentworks-target
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download validated distributions
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          packages-dir: dist/
+          print-hash: true

@@ -14,12 +14,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -39,5 +41,92 @@ jobs:
       - name: Test
         run: python -m pytest
 
-      - name: Build distributions
+  minimum-dependencies:
+    name: Minimum runtime dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install declared minimum runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-deps -e .
+          python -m pip install \
+            "httpx==0.27.0" \
+            "pydantic==2.8.0" \
+            "fastapi==0.111.0" \
+            "pytest==9.0.3" \
+            "tomli>=2,<3"
+
+      - name: Test minimum dependency set
+        run: python -m pytest
+
+  package:
+    name: Validate distributions
+    needs: [test, minimum-dependencies]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install packaging tools
+        run: >-
+          python -m pip install --upgrade pip &&
+          python -m pip install
+          "build>=1.2,<2"
+          "check-wheel-contents>=0.6,<1"
+          "twine>=7,<8"
+
+      - name: Build wheel and source distribution
         run: python -m build
+
+      - name: Validate distribution metadata and contents
+        run: |
+          python -m twine check --strict dist/*
+          check-wheel-contents dist/*.whl
+          test "$(find dist -maxdepth 1 -name '*.whl' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 1
+
+      - name: Smoke-test installed wheel
+        run: |
+          wheel_path="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          python -m venv "$RUNNER_TEMP/wheel-smoke"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install "${wheel_path}[fastapi]"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "import importlib.metadata; import augmentworks_target; from augmentworks_target.fastapi import create_router; assert importlib.metadata.version('augmentworks-target') == augmentworks_target.__version__"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/wheel-smoke/bin/augmentworks-target" --help
+
+      - name: Smoke-test installed source distribution
+        run: |
+          sdist_path="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          python -m venv "$RUNNER_TEMP/sdist-smoke"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install "$sdist_path"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -c "import importlib.metadata; import augmentworks_target; assert importlib.metadata.version('augmentworks-target') == augmentworks_target.__version__"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip check
+
+      - name: Store validated distributions
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: python-package-distributions-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
