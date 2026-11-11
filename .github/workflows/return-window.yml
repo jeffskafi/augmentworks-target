@@ -1,0 +1,96 @@
+name: Return-window policy
+
+on:
+  pull_request:
+    paths:
+      - 'examples/return_window_ci/**'
+      - '.github/workflows/return-window.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    name: Check the agent's return window
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CHATBOT_BASE_URL: http://127.0.0.1:8197
+      CHATBOT_API_KEY: synthetic-local-only
+    steps:
+      - name: Check out the revision under test
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Start the synthetic agent from this checkout
+        id: target
+        shell: bash
+        run: |
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 examples/return_window_ci/server.py --port 8197 > "$RUNNER_TEMP/return-window-agent.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/return-window-agent.pid"
+          python3 - <<'PY'
+          import socket
+          import time
+
+          for _ in range(50):
+              try:
+                  with socket.create_connection(("127.0.0.1", 8197), timeout=0.5):
+                      break
+              except OSError:
+                  time.sleep(0.1)
+          else:
+              raise SystemExit("The loopback fixture did not start.")
+          PY
+
+      - name: Run the policy check
+        id: check
+        uses: augmentworks-org/augmentworks-action@d9548370e283b894edbb97c45ef3184ad752460a
+        with:
+          mode: local
+          working-directory: examples/return_window_ci
+          config: augmentworks.yaml
+          packet: packet.json
+          tested-revision: ${{ steps.target.outputs.revision }}
+
+      - name: Record evidence for this revision
+        if: ${{ !cancelled() && steps.check.outputs.run-id != '' }}
+        env:
+          REVISION: ${{ steps.target.outputs.revision }}
+          REPORT: ${{ steps.check.outputs.report-path }}
+          PROVENANCE: ${{ steps.check.outputs.provenance-path }}
+          OUTCOME: ${{ steps.check.outputs.outcome }}
+          RUN_ID: ${{ steps.check.outputs.run-id }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT"]).read_text())
+          source = json.loads(Path(os.environ["PROVENANCE"]).read_text())
+          revision = os.environ["REVISION"]
+          run_id = os.environ["RUN_ID"]
+          assert source["tested_revision"] == revision
+          assert report["run_id"] == source["run_id"] == run_id
+          assert report["outcome"] == source["outcome"] == os.environ["OUTCOME"]
+          checks = [check for attempt in report["attempts"]
+                    for check in attempt["assertions"] if check["key"] == "return-window-30-days"]
+          assert len(checks) == 1 and isinstance(checks[0]["passed"], bool)
+          verdict = "passed" if checks[0]["passed"] else "failed"
+          assert verdict == report["outcome"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              print(f"Tested commit `{revision}` · local run `{run_id}`", file=summary)
+              print(f"\nPolicy check `return-window-30-days` **{verdict}**.", file=summary)
+          PY
+
+      - name: Stop the synthetic agent
+        if: always()
+        shell: bash
+        run: |
+          pid_file="$RUNNER_TEMP/return-window-agent.pid"
+          if test -s "$pid_file"; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi

@@ -1,0 +1,39 @@
+{
+  "schema_version": "aw-packet/0.1",
+  "packet_id": "return-window-reference",
+  "version": "0.1.0",
+  "name": "Return window",
+  "description": "Check the canonical reply from a deterministic fictional store.",
+  "domain": "customer-support",
+  "synthetic_only": true,
+  "required_capabilities": {
+    "multi_turn": false,
+    "observation": false,
+    "tool_events": false,
+    "cleanup": false
+  },
+  "scenarios": [
+    {
+      "key": "return-window-reference.faq",
+      "name": "Return-window question",
+      "category": "policy",
+      "severity": "high",
+      "description": "Ask the store about its return deadline.",
+      "expected_behavior": "The fixture returns its canonical thirty-day sentence.",
+      "fixture": {},
+      "turns": [{"content": "How long do I have to return an item?"}],
+      "observation_keys": [],
+      "assertions": [
+        {
+          "kind": "assistant_contains",
+          "key": "return-window-30-days",
+          "description": "The answer includes the complete canonical thirty-day sentence.",
+          "value": "You have 30 days to return your order.",
+          "case_sensitive": true
+        }
+      ],
+      "repetitions": 1,
+      "pass_threshold": 1
+    }
+  ]
+}

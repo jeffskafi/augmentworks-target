@@ -1,0 +1,20 @@
+version: 1
+target:
+  name: return-window-reference
+  connector: http
+  base_url: ${CHATBOT_BASE_URL}
+  auth:
+    bearer_env: CHATBOT_API_KEY
+  operations:
+    send:
+      method: POST
+      path: /chat
+      idempotent: false
+      request:
+        message: $input.message.content
+      response:
+        content: $.answer
+        finished: $.finished
+telemetry:
+  allow_tool_events: false
+  allow_observations: []
